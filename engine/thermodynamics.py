@@ -1,7 +1,6 @@
 class Thermodynamics:
     """
-    Handles the basic thermodynamic calculations
-    for the EngineLab simulation.
+    Basic thermodynamic calculations for EngineLab.
     """
 
     def __init__(self, config, geometry):
@@ -9,27 +8,20 @@ class Thermodynamics:
         self.geometry = geometry
 
         # Specific gas constant for air
-        # Units: J / (kg * K)
+        # J / (kg * K)
         self.R = 287.05
 
     def trapped_air_mass(self):
         """
         Estimate the mass of air trapped in the cylinder
-        at bottom dead center (BDC).
+        at bottom dead center using the ideal gas law.
 
-        Uses the ideal gas law:
-
-            PV = mRT
-
-        Rearranged:
-
-            m = PV / RT
+        PV = mRT
         """
 
         P = self.config.intake_pressure_pa
         T = self.config.intake_temperature_k
 
-        # Cylinder volume at BDC
         V = (
             self.geometry.swept_volume
             + self.geometry.clearance_volume
@@ -41,25 +33,14 @@ class Thermodynamics:
 
     def compression_pressure(self, volume):
         """
-        Calculate cylinder pressure during ideal
-        adiabatic compression.
-
-        Relationship:
-
-            P1 * V1^gamma = P2 * V2^gamma
-
-        Therefore:
-
-            P2 = P1 * (V1 / V2)^gamma
+        Calculate pressure during ideal adiabatic compression.
         """
 
-        # Cylinder volume at BDC
         V1 = (
             self.geometry.swept_volume
             + self.geometry.clearance_volume
         )
 
-        # Intake pressure
         P1 = self.config.intake_pressure_pa
 
         pressure = (
@@ -71,27 +52,14 @@ class Thermodynamics:
 
     def compression_temperature(self, volume):
         """
-        Calculate cylinder temperature during ideal
-        adiabatic compression.
-
-        Relationship:
-
-            T1 * V1^(gamma - 1)
-            =
-            T2 * V2^(gamma - 1)
-
-        Therefore:
-
-            T2 = T1 * (V1 / V2)^(gamma - 1)
+        Calculate temperature during ideal adiabatic compression.
         """
 
-        # Cylinder volume at BDC
         V1 = (
             self.geometry.swept_volume
             + self.geometry.clearance_volume
         )
 
-        # Intake temperature
         T1 = self.config.intake_temperature_k
 
         temperature = (
@@ -101,3 +69,43 @@ class Thermodynamics:
         )
 
         return temperature
+
+    def fuel_mass_per_cycle(self):
+        """
+        Calculate fuel mass from trapped air mass
+        and air/fuel ratio.
+        """
+
+        air_mass = self.trapped_air_mass()
+
+        fuel_mass = air_mass / self.config.afr
+
+        return fuel_mass
+
+    def fuel_energy_per_cycle(self):
+        """
+        Calculate chemical energy contained in the
+        fuel for one combustion event.
+        """
+
+        fuel_mass = self.fuel_mass_per_cycle()
+
+        fuel_energy = (
+            fuel_mass
+            * self.config.fuel_lhv_j_per_kg
+        )
+
+        return fuel_energy
+
+    def released_combustion_energy(self):
+        """
+        Estimate how much fuel energy is actually
+        released during combustion.
+        """
+
+        released_energy = (
+            self.fuel_energy_per_cycle()
+            * self.config.combustion_efficiency
+        )
+
+        return released_energy

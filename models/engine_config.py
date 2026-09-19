@@ -24,3 +24,8 @@ class EngineConfig:
     # Fuel
     afr: float = 14.7
     fuel_lhv_j_per_kg: float = 44_000_000
+
+    # Combustion
+    ignition_timing_deg: float = 15.0       # degrees before TDC
+    combustion_duration_deg: float = 50.0   # crank degrees
+    combustion_efficiency: float = 0.95
