@@ -1,6 +1,10 @@
 class Thermodynamics:
     """
-    Basic thermodynamic calculations for EngineLab.
+    Thermodynamic calculations for EngineLab.
+
+    V0.5 adds:
+    - Temperature-dependent gas properties
+    - Approximate wall heat transfer
     """
 
     def __init__(self, config, geometry):
@@ -11,12 +15,15 @@ class Thermodynamics:
         # J / (kg * K)
         self.R = 287.05
 
+    # --------------------------------------------------
+    # MASS / FUEL
+    # --------------------------------------------------
+
     def trapped_air_mass(self):
         """
-        Estimate the mass of air trapped in the cylinder
-        at bottom dead center using the ideal gas law.
+        Estimate trapped air mass at BDC using:
 
-        PV = mRT
+            PV = mRT
         """
 
         P = self.config.intake_pressure_pa
@@ -27,13 +34,82 @@ class Thermodynamics:
             + self.geometry.clearance_volume
         )
 
-        mass = (P * V) / (self.R * T)
+        return (P * V) / (self.R * T)
 
-        return mass
+    def fuel_mass_per_cycle(self):
+        air_mass = self.trapped_air_mass()
+
+        return air_mass / self.config.afr
+
+    def fuel_energy_per_cycle(self):
+        fuel_mass = self.fuel_mass_per_cycle()
+
+        return (
+            fuel_mass
+            * self.config.fuel_lhv_j_per_kg
+        )
+
+    def released_combustion_energy(self):
+        return (
+            self.fuel_energy_per_cycle()
+            * self.config.combustion_efficiency
+        )
+
+    # --------------------------------------------------
+    # GAS PROPERTIES
+    # --------------------------------------------------
+
+    def cp(self, temperature):
+        """
+        Approximate temperature-dependent specific
+        heat capacity at constant pressure.
+
+        Units:
+            J / (kg * K)
+
+        This is intentionally a simple approximation
+        for V0.5, not a detailed combustion-gas model.
+        """
+
+        T = max(250.0, min(float(temperature), 3500.0))
+
+        cp = (
+            1005.0
+            + 0.10 * (T - 300.0)
+        )
+
+        return cp
+
+    def cv(self, temperature):
+        """
+        cv = cp - R
+        """
+
+        return (
+            self.cp(temperature)
+            - self.R
+        )
+
+    def gamma(self, temperature):
+        """
+        gamma = cp / cv
+        """
+
+        cp = self.cp(temperature)
+        cv = self.cv(temperature)
+
+        return cp / cv
+
+    # --------------------------------------------------
+    # ORIGINAL COMPRESSION HELPERS
+    # --------------------------------------------------
 
     def compression_pressure(self, volume):
         """
-        Calculate pressure during ideal adiabatic compression.
+        Approximate ideal compression helper.
+
+        Retained primarily for comparison with the
+        earlier V0.2 model.
         """
 
         V1 = (
@@ -43,18 +119,16 @@ class Thermodynamics:
 
         P1 = self.config.intake_pressure_pa
 
-        pressure = (
-            P1
-            * (V1 / volume) ** self.config.gamma
+        gamma = self.gamma(
+            self.config.intake_temperature_k
         )
 
-        return pressure
+        return (
+            P1
+            * (V1 / volume) ** gamma
+        )
 
     def compression_temperature(self, volume):
-        """
-        Calculate temperature during ideal adiabatic compression.
-        """
-
         V1 = (
             self.geometry.swept_volume
             + self.geometry.clearance_volume
@@ -62,50 +136,75 @@ class Thermodynamics:
 
         T1 = self.config.intake_temperature_k
 
-        temperature = (
+        gamma = self.gamma(T1)
+
+        return (
             T1
-            * (V1 / volume)
-            ** (self.config.gamma - 1)
+            * (V1 / volume) ** (gamma - 1.0)
         )
 
-        return temperature
+    # --------------------------------------------------
+    # HEAT TRANSFER
+    # --------------------------------------------------
 
-    def fuel_mass_per_cycle(self):
+    def wall_heat_transfer_coefficient(
+        self,
+        pressure,
+        temperature,
+        piston_speed
+    ):
         """
-        Calculate fuel mass from trapped air mass
-        and air/fuel ratio.
+        Simplified empirical heat-transfer coefficient.
+
+        Returns:
+            W / (m^2 * K)
+
+        This is a deliberately simplified engineering
+        approximation for V0.5.
         """
 
-        air_mass = self.trapped_air_mass()
+        pressure_bar = pressure / 100000.0
 
-        fuel_mass = air_mass / self.config.afr
-
-        return fuel_mass
-
-    def fuel_energy_per_cycle(self):
-        """
-        Calculate chemical energy contained in the
-        fuel for one combustion event.
-        """
-
-        fuel_mass = self.fuel_mass_per_cycle()
-
-        fuel_energy = (
-            fuel_mass
-            * self.config.fuel_lhv_j_per_kg
+        h = (
+            120.0
+            + 18.0 * pressure_bar
+            + 35.0 * abs(piston_speed)
         )
 
-        return fuel_energy
+        return max(h, 50.0)
 
-    def released_combustion_energy(self):
+    def wall_heat_loss(
+        self,
+        pressure,
+        gas_temperature,
+        wall_temperature,
+        surface_area,
+        piston_speed,
+        dt
+    ):
         """
-        Estimate how much fuel energy is actually
-        released during combustion.
+        Calculate heat transferred from cylinder gas
+        to the walls during one timestep.
+
+            Q = h A (Tgas - Twall) dt
+
+        Returns joules.
         """
 
-        released_energy = (
-            self.fuel_energy_per_cycle()
-            * self.config.combustion_efficiency
+        if gas_temperature <= wall_temperature:
+            return 0.0
+
+        h = self.wall_heat_transfer_coefficient(
+            pressure,
+            gas_temperature,
+            piston_speed
         )
 
-        return released_energy
+        heat_loss = (
+            h
+            * surface_area
+            * (gas_temperature - wall_temperature)
+            * dt
+        )
+
+        return max(heat_loss, 0.0)

@@ -29,3 +29,6 @@ class EngineConfig:
     ignition_timing_deg: float = 15.0       # degrees before TDC
     combustion_duration_deg: float = 50.0   # crank degrees
     combustion_efficiency: float = 0.95
+
+    # Thermal conditions
+    wall_temperature_k: float = 450.0

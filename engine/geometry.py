@@ -60,3 +60,47 @@ class EngineGeometry:
             self.swept_volume
             + self.clearance_volume
         ) * 1_000_000
+
+    def piston_velocity(self, crank_angle_deg, rpm):
+        """
+        Numerically estimate instantaneous piston
+        velocity in m/s.
+        """
+
+        delta_angle = 0.01
+
+        x1 = self.piston_position(crank_angle_deg - delta_angle)
+
+        x2 = self.piston_position(crank_angle_deg + delta_angle)
+
+        dx_dtheta_deg = ((x2 - x1)/ (2.0 * delta_angle))
+
+        degrees_per_second = (rpm * 360.0 / 60.0)
+
+        velocity = (dx_dtheta_deg* degrees_per_second)
+
+        return velocity
+
+    def chamber_surface_area(self, crank_angle_deg):
+        """
+        Approximate exposed combustion chamber
+        surface area.
+
+        Includes:
+        - piston crown
+        - approximate head area
+        - exposed cylinder wall
+        """
+
+        position = self.piston_position(crank_angle_deg)
+
+        piston_crown_area = self.piston_area
+
+        head_area = self.piston_area
+
+        cylinder_wall_area = (math.pi* self.bore* position)
+
+        total_area = (piston_crown_area+ head_area+ cylinder_wall_area
+        )
+
+        return total_area 
