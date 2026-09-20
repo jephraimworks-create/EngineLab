@@ -1,10 +1,14 @@
+import math
+
+
 class Thermodynamics:
     """
-    Thermodynamic calculations for EngineLab.
+    Thermodynamic property and heat-transfer calculations.
 
-    V0.5 adds:
-    - Temperature-dependent gas properties
-    - Approximate wall heat transfer
+    Uses:
+    - ideal-gas equation of state
+    - temperature-dependent air specific heats
+    - Hohenberg-style in-cylinder heat transfer
     """
 
     def __init__(self, config, geometry):
@@ -12,40 +16,43 @@ class Thermodynamics:
         self.geometry = geometry
 
         # Specific gas constant for air
-        # J / (kg * K)
         self.R = 287.05
 
+        # Calorically perfect reference value
+        self.gamma_reference = 1.4
+
+        # Approximate vibrational temperature for air
+        self.theta_v = 5500.0 * (5.0 / 9.0)
+
     # --------------------------------------------------
-    # MASS / FUEL
+    # MASS AND FUEL
     # --------------------------------------------------
 
     def trapped_air_mass(self):
-        """
-        Estimate trapped air mass at BDC using:
+        """Calculate trapped air mass at BDC."""
 
-            PV = mRT
-        """
+        pressure = self.config.intake_pressure_pa
+        temperature = self.config.intake_temperature_k
 
-        P = self.config.intake_pressure_pa
-        T = self.config.intake_temperature_k
-
-        V = (
+        volume = (
             self.geometry.swept_volume
             + self.geometry.clearance_volume
         )
 
-        return (P * V) / (self.R * T)
+        return (
+            pressure * volume
+            / (self.R * temperature)
+        )
 
     def fuel_mass_per_cycle(self):
-        air_mass = self.trapped_air_mass()
-
-        return air_mass / self.config.afr
+        return (
+            self.trapped_air_mass()
+            / self.config.afr
+        )
 
     def fuel_energy_per_cycle(self):
-        fuel_mass = self.fuel_mass_per_cycle()
-
         return (
-            fuel_mass
+            self.fuel_mass_per_cycle()
             * self.config.fuel_lhv_j_per_kg
         )
 
@@ -59,31 +66,55 @@ class Thermodynamics:
     # GAS PROPERTIES
     # --------------------------------------------------
 
-    def cp(self, temperature):
-        """
-        Approximate temperature-dependent specific
-        heat capacity at constant pressure.
-
-        Units:
-            J / (kg * K)
-
-        This is intentionally a simple approximation
-        for V0.5, not a detailed combustion-gas model.
-        """
-
-        T = max(250.0, min(float(temperature), 3500.0))
-
-        cp = (
-            1005.0
-            + 0.10 * (T - 300.0)
+    def _vibrational_term(self, temperature):
+        temperature = max(
+            float(temperature),
+            200.0
         )
 
-        return cp
+        x = self.theta_v / temperature
+
+        exp_x = math.exp(x)
+
+        denominator = (
+            exp_x - 1.0
+        ) ** 2
+
+        return (
+            x**2
+            * exp_x
+            / denominator
+        )
+
+    def cp(self, temperature):
+        """Temperature-dependent cp in J/(kg K)."""
+
+        gamma = self.gamma_reference
+
+        cp_reference = (
+            gamma
+            * self.R
+            / (gamma - 1.0)
+        )
+
+        correction = (
+            1.0
+            + (
+                (gamma - 1.0)
+                / gamma
+            )
+            * self._vibrational_term(
+                temperature
+            )
+        )
+
+        return (
+            cp_reference
+            * correction
+        )
 
     def cv(self, temperature):
-        """
-        cv = cp - R
-        """
+        """Temperature-dependent cv in J/(kg K)."""
 
         return (
             self.cp(temperature)
@@ -91,9 +122,7 @@ class Thermodynamics:
         )
 
     def gamma(self, temperature):
-        """
-        gamma = cp / cv
-        """
+        """Temperature-dependent heat-capacity ratio."""
 
         cp = self.cp(temperature)
         cv = self.cv(temperature)
@@ -101,77 +130,111 @@ class Thermodynamics:
         return cp / cv
 
     # --------------------------------------------------
-    # ORIGINAL COMPRESSION HELPERS
+    # INTERNAL ENERGY
     # --------------------------------------------------
 
-    def compression_pressure(self, volume):
+    def specific_internal_energy(self, temperature):
         """
-        Approximate ideal compression helper.
+        Numerically integrate cv(T) from 200 K to T.
 
-        Retained primarily for comparison with the
-        earlier V0.2 model.
+        This is primarily used for energy accounting.
         """
 
-        V1 = (
-            self.geometry.swept_volume
-            + self.geometry.clearance_volume
+        temperature = max(
+            float(temperature),
+            200.0
         )
 
-        P1 = self.config.intake_pressure_pa
+        if temperature == 200.0:
+            return 0.0
 
-        gamma = self.gamma(
-            self.config.intake_temperature_k
-        )
+        steps = 200
+
+        delta_t = (
+            temperature - 200.0
+        ) / steps
+
+        energy = 0.0
+
+        for i in range(steps):
+            t1 = (
+                200.0
+                + i * delta_t
+            )
+
+            t2 = (
+                t1 + delta_t
+            )
+
+            cv_average = (
+                self.cv(t1)
+                + self.cv(t2)
+            ) / 2.0
+
+            energy += (
+                cv_average
+                * delta_t
+            )
+
+        return energy
+
+    # --------------------------------------------------
+    # PISTON SPEED
+    # --------------------------------------------------
+
+    def mean_piston_speed(self):
+        """Mean piston speed in m/s."""
 
         return (
-            P1
-            * (V1 / volume) ** gamma
-        )
-
-    def compression_temperature(self, volume):
-        V1 = (
-            self.geometry.swept_volume
-            + self.geometry.clearance_volume
-        )
-
-        T1 = self.config.intake_temperature_k
-
-        gamma = self.gamma(T1)
-
-        return (
-            T1
-            * (V1 / volume) ** (gamma - 1.0)
+            2.0
+            * self.geometry.stroke
+            * self.config.rpm
+            / 60.0
         )
 
     # --------------------------------------------------
     # HEAT TRANSFER
     # --------------------------------------------------
 
-    def wall_heat_transfer_coefficient(
+    def hohenberg_heat_transfer_coefficient(
         self,
         pressure,
         temperature,
-        piston_speed
+        volume
     ):
         """
-        Simplified empirical heat-transfer coefficient.
+        Approximate Hohenberg heat-transfer correlation.
 
         Returns:
-            W / (m^2 * K)
-
-        This is a deliberately simplified engineering
-        approximation for V0.5.
+            W/(m^2 K)
         """
 
-        pressure_bar = pressure / 100000.0
-
-        h = (
-            120.0
-            + 18.0 * pressure_bar
-            + 35.0 * abs(piston_speed)
+        volume = max(
+            float(volume),
+            1e-12
         )
 
-        return max(h, 50.0)
+        temperature = max(
+            float(temperature),
+            200.0
+        )
+
+        pressure_bar = max(
+            float(pressure) / 100000.0,
+            0.01
+        )
+
+        mean_speed = (
+            self.mean_piston_speed()
+        )
+
+        return (
+            130.0
+            * volume ** (-0.06)
+            * pressure_bar**0.8
+            * temperature ** (-0.4)
+            * (mean_speed + 1.4) ** 0.8
+        )
 
     def wall_heat_loss(
         self,
@@ -179,32 +242,37 @@ class Thermodynamics:
         gas_temperature,
         wall_temperature,
         surface_area,
-        piston_speed,
+        volume,
         dt
     ):
         """
-        Calculate heat transferred from cylinder gas
-        to the walls during one timestep.
+        Convective wall heat loss for one time step.
 
-            Q = h A (Tgas - Twall) dt
-
-        Returns joules.
+        Positive result means heat leaves the gas.
         """
 
         if gas_temperature <= wall_temperature:
             return 0.0
 
-        h = self.wall_heat_transfer_coefficient(
-            pressure,
-            gas_temperature,
-            piston_speed
+        h = (
+            self.hohenberg_heat_transfer_coefficient(
+                pressure=pressure,
+                temperature=gas_temperature,
+                volume=volume
+            )
         )
 
         heat_loss = (
             h
             * surface_area
-            * (gas_temperature - wall_temperature)
+            * (
+                gas_temperature
+                - wall_temperature
+            )
             * dt
         )
 
-        return max(heat_loss, 0.0)
+        return max(
+            heat_loss,
+            0.0
+        )

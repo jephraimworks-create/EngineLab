@@ -1,22 +1,26 @@
-import numpy as np
+import math
 
 
 class CombustionModel:
+    """Single-Wiebe combustion model."""
 
     def __init__(self, config):
         self.config = config
 
     def start_angle(self):
-        """
-        Convert ignition timing in degrees BTDC
-        into our 0-720 degree crank-angle system.
-        """
+        """Start of combustion in absolute crank angle."""
 
-        return 360.0 - self.config.ignition_timing_deg
+        return (
+            360.0
+            - self.config.combustion_start_btdc_deg
+        )
 
-    def end_angle(self):
+    def nominal_end_angle(self):
         """
-        End of the simplified combustion event.
+        Nominal combustion-duration endpoint.
+
+        The Wiebe function approaches 100%
+        asymptotically and is not forcibly truncated here.
         """
 
         return (
@@ -26,31 +30,31 @@ class CombustionModel:
 
     def burned_fraction(self, crank_angle_deg):
         """
-        Approximate the fraction of fuel burned at
-        a particular crank angle.
+        Calculate mass fraction burned using:
 
-        Uses a smooth half-cosine curve.
-
-        Returns a value from 0.0 to 1.0.
+            xb = 1 - exp(-a * x^(m + 1))
         """
 
         start = self.start_angle()
-        end = self.end_angle()
 
         if crank_angle_deg <= start:
             return 0.0
 
-        if crank_angle_deg >= end:
-            return 1.0
-
         progress = (
-            (crank_angle_deg - start)
-            / (end - start)
+            crank_angle_deg - start
+        ) / self.config.combustion_duration_deg
+
+        burned_fraction = (
+            1.0
+            - math.exp(
+                -self.config.wiebe_a
+                * progress ** (
+                    self.config.wiebe_m + 1.0
+                )
+            )
         )
 
-        fraction = (
-            0.5
-            - 0.5 * np.cos(np.pi * progress)
+        return min(
+            max(burned_fraction, 0.0),
+            1.0
         )
-
-        return fraction
